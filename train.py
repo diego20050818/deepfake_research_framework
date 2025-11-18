@@ -1,0 +1,92 @@
+import torch
+import os
+
+from ruamel.yaml import YAML
+import torch.nn as nn
+from torch.utils.tensorboard.writer import SummaryWriter
+from loguru import logger
+from pprint import pprint
+from pathlib import Path
+from datetime import datetime
+
+from tools.utils import print_config,print_model_summary,yaml_to_string
+from tools.dataset_loader import get_dataloader
+from tools.image_preprocess import transforms_train
+from tools.trainer import train_model,train_one_epoch,validate,setup_training_components
+
+from model import RINEPlusSSCA
+
+base_config_path = 'config.yaml'
+train_config_path = 'train_config.yaml'
+
+yaml = YAML()
+
+with open(base_config_path,'r',encoding='utf-8') as f:
+    base_config:dict = yaml.load(f)
+
+with open(train_config_path,'r',encoding='utf-8') as f:
+    train_config:dict = yaml.load(f)
+
+logger.info("load base config and train config successfully")
+
+print_config(base_config,'基础')
+print_config(train_config,'训练')
+
+# 定义设备
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+# -----------------
+# 数据集加载
+# -----------------
+dataset_root = Path(base_config.get('dataset_root','./dataset'))
+
+train_dataset, test_dataset = get_dataloader(
+    dataset_root=dataset_root,
+    dataset_names=base_config.get('dataset_path',['Celeb-DF']),
+    batch_size=train_config.get('batch_size',16),
+    transform=transforms_train,
+    split=train_config.get('dataset_split',0.8)
+)
+
+# -----------------
+# 模型定义
+# -----------------
+model = RINEPlusSSCA().to(device)
+
+
+logger.info("load model successfully")
+pprint(model)
+
+time_now = datetime.now().strftime("%Y年%m月%d日 > %H:%M")
+log_dir = f'./runs/experiment > {time_now}'
+base_config_str = yaml_to_string(base_config)
+train_config_str = yaml_to_string(train_config)
+
+writer = SummaryWriter(log_dir=log_dir)
+writer.add_text('base_config', base_config_str)
+writer.add_text('train_config', train_config_str)
+
+chechpoint_path = Path(base_config.get('model_save_path','checkpoint')) / time_now
+chechpoint_path.mkdir(parents=True,exist_ok=True)
+logger.info("begin training")
+
+# -----------------
+# 开始训练
+# -----------------
+train_model(
+    model=model,
+    train_dataset=train_dataset,
+    test_dataset=test_dataset,
+    train_config=train_config,
+    device=device, # type: ignore
+    writer=writer,
+    checkpoint_path=chechpoint_path
+)
+
+
+
+
+
+
+
+

@@ -1,0 +1,28 @@
+# 基础训练配置
+epochs: 2
+learning_rate: 1e-4
+batch_size: 32
+dataset_split: 0.8
+
+# 优化器相关配置
+weight_decay: 1e-4
+
+# 检查点保存间隔
+save_interval: 1
+
+# 学习率调度器相关配置
+lr_scheduler: "cosine"  # 可选: cosine, step, exponential等
+
+# 如果使用StepLR调度器需要的参数
+step_size: 5
+gamma: 0.1
+
+# 如果使用早停机制
+early_stopping_patience: 5
+early_stopping_min_delta: 1e-4
+
+# TensorBoard日志目录（可选）
+log_dir: "./runs"
+
+# 随机种子（可选）
+seed: 42
