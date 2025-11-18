@@ -12,7 +12,7 @@ from datetime import datetime
 from tools.utils import print_config,print_model_summary,yaml_to_string
 from tools.dataset_loader import get_dataloader
 from tools.image_preprocess import transforms_train
-from tools.trainer import train_model,train_one_epoch,validate,setup_training_components
+from tools.trainer import train_model
 
 from model import RINEPlusSSCA
 
@@ -65,6 +65,13 @@ train_config_str = yaml_to_string(train_config)
 writer = SummaryWriter(log_dir=log_dir)
 writer.add_text('base_config', base_config_str)
 writer.add_text('train_config', train_config_str)
+
+# 在 train_model 调用之前添加以下代码
+dummy_input = torch.randn(1, 3, 224, 224).to(device) 
+try:
+    writer.add_graph(model, dummy_input)
+except Exception as e:
+    logger.warning(f"Failed to add graph to TensorBoard: {e}")
 
 chechpoint_path = Path(base_config.get('model_save_path','checkpoint')) / time_now
 chechpoint_path.mkdir(parents=True,exist_ok=True)

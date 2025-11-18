@@ -111,7 +111,7 @@ class SSCA(nn.Module):
             torch.Tensor: 经过空间-频率协同注意力增强后的特征图，shape 与输入完全一致 [B, C, H, W]，
                 数据类型与输入保持一致，保留原始特征的空间维度和通道维度。
 
-        Notes:
+
             1. 傅里叶变换相关参数：
                - 使用 torch.fft.rfft2（实数输入的 FFT），仅输出非冗余的频率成分（节省计算量）；
                - 逆变换使用 torch.fft.irfft2，通过 s=(H, W) 指定输出空间维度，确保与输入一致；

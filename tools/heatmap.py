@@ -2,9 +2,10 @@ import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
 import seaborn as sns
-from typing import Union, Optional, List
+from typing import Union, Optional, List, Tuple
 from PIL import Image
 import torchvision.transforms as T
+from loguru import logger
 
 
 class AttentionVisualizer:
@@ -49,7 +50,13 @@ class AttentionVisualizer:
         features = {}
 
         def hook_fn(module, input, output):
-            features['output'] = output.detach()
+            
+            # 处理元组输出的情况
+            if isinstance(output, tuple):
+                # 如果是元组，取第一个元素（通常包含主要的特征图）
+                output = output[0]
+            logger.info(output,type(output)) 
+            features['output'] = output.detach() # BUG 这ooutput会变成元组
 
         # 获取目标模块
         named_modules = dict(self.model.named_modules())
@@ -73,7 +80,7 @@ class AttentionVisualizer:
         if 'output' not in features:
             raise RuntimeError("Hook failed to capture output.")
         return features['output']  # [B, C, H, W]
-
+    @logger.catch()
     def visualize_spatial_attention(
         self,
         image: Union[Image.Image, torch.Tensor],
@@ -123,7 +130,7 @@ class AttentionVisualizer:
         else:
             plt.show()
         plt.close()
-
+    @logger.catch()
     def visualize_feature_maps(
         self,
         image: Union[Image.Image, torch.Tensor],
