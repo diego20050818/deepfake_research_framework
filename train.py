@@ -16,8 +16,8 @@ from tools.trainer import train_model
 
 from model import RINEPlusSSCA
 
-base_config_path = 'config.yaml'
-train_config_path = 'train_config.yaml'
+base_config_path = 'config/config.yaml'
+train_config_path = 'config/train_config.yaml'
 
 yaml = YAML()
 

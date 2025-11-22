@@ -1,0 +1,11 @@
+dataset_root: /home/liangshuqiao/hong/deepfake/rine_opt/dataset # 存储数据集的根目录
+dataset_path: 
+  # - Celeb-DF
+  # - Celeb-DF-v2
+  # - deep-fake-detection-dfd
+  # - DFDC
+  # - WildDeepfake
+  - FF++
+
+
+checkpoint_path: checkpoint/2025年11月16日 > 23:43/best_model.pth

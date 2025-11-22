@@ -220,6 +220,85 @@ def get_dataloader(
     
     return train_dataloader, test_dataloader
 
+@logger.catch()
+def get_validation_dataloader(
+        dataset_root: Path,
+        dataset_names: List[str],
+        batch_size: int,
+        transform: transforms.Compose,
+        num_works: int = 4,
+        labels_file_name: str = 'labels.csv'
+) -> DataLoader:
+    """
+    创建完整数据集作为验证集，返回对应的 DataLoader
+
+    Args:
+        dataset_root (Path): 数据集根目录
+        dataset_names (List[str]): 数据集根目录下的数据集名称
+        batch_size (int): 批次大小
+        transform (transforms.Compose): 图像变换方法
+        num_works (int, optional): 并行数量. Defaults to 4.
+        labels_file_name (str, optional): 数据集目录下的标签文件名称. Defaults to 'labels.csv'.
+
+    Returns:
+        DataLoader: 验证集 DataLoader
+    """
+    
+    start_time = time.time()
+    
+    # 1. 创建完整数据集
+    full_dataset = CustomImageDataset(
+        dataset_root=dataset_root,
+        dataset_names=dataset_names,
+        labels_file_name=labels_file_name,
+        transform=transform
+    )
+    logger.info(f"完整验证集大小: {len(full_dataset)}")
+    
+
+    def collate_fn(batch):
+        # 过滤掉 None/损坏的样本
+        batch = list(filter(lambda x: x is not None, batch))
+        if not batch:
+            return None, None
+        return default_collate(batch)
+    
+
+    val_dataloader = DataLoader(
+        full_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_works,
+        collate_fn=collate_fn,
+        pin_memory=True
+    )
+    
+    
+    end_time = time.time()
+    logger.info(f"验证集加载完成，总耗时: {end_time - start_time:.2f}s")
+    
+    return val_dataloader
+
+from itertools import islice
+
+class LimitedDataLoader:
+    def __init__(self, dataloader, max_batches):
+        """限制数据集 对数据集进行切片
+
+        Args:
+            dataloader (dataloader): 数据集实例
+            max_batches (int): 前n个批次
+        """
+        self.dataloader = dataloader
+        self.max_batches = max_batches
+    
+    def __iter__(self):
+        return islice(self.dataloader, self.max_batches)
+    
+    def __len__(self):
+        return min(self.max_batches, len(self.dataloader))
+
+
 if __name__ == '__main__':
     from tools.image_preprocess import transforms_train
     data_root = Path('dataset')
