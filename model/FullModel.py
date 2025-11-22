@@ -127,6 +127,7 @@ class RINEPlusSSCA(nn.Module):
         z_repr = self.gated(z_repr)  # [B, repr_dim]
         logits = self.class_head(z_repr).squeeze(1)  # [B]
         rep_for_contrast = self.repr_out(z_repr)  # [B, repr_dim]
-        return logits, rep_for_contrast
+        # return logits, rep_for_contrast
+        return logits
     
 

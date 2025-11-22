@@ -11,6 +11,7 @@ from .SSCA import SSCA
 from .CrossAttention import CrossAttentionCombination
 from .GateMLP import GatedMLP
 from .FullModel import RINEPlusSSCA
+from .Adapter import Adapter
 # 若有其他模块（如 utils、dataset 等），也可在此导入
 
 # 明确对外导出的内容
@@ -22,5 +23,6 @@ __all__ = [
     "SSCA",
     "CrossAttentionCombination",
     "GatedMLP",
-    "RINEPlusSSCA"
+    "RINEPlusSSCA",
+    "Adapter"
 ]
