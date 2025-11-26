@@ -127,34 +127,42 @@ class CustomImageDataset(Dataset):
         return image, label
 @logger.catch()
 def get_dataloader(
-        dataset_root: Path,
-        dataset_names: List[str],
-        batch_size: int,
-        transform: transforms.Compose,
-        split: float = 0.8,
-        random_seed: int = 42,
-        num_works: int = 4,
-        labels_file_name: str = 'labels.csv'
-) -> Tuple[DataLoader, DataLoader]:
+    dataset_root: Path,
+    dataset_names: List[str],
+    batch_size: int,
+    transform: transforms.Compose,
+    split: float = 0.8, # 训练集占总数据集的比例 (Train: 0.8, Test: 0.2)
+    validation: bool = False, # 是否进行三方分割 (Train/Val/Test)
+    val_ratio_of_remainder: float = 0.5, # 如果 validation=True, 剩余部分中分给验证集的比例
+    random_seed: int = 42,
+    num_works: int = 4,
+    labels_file_name: str = 'labels.csv'
+) -> Tuple[DataLoader, ...]:
     """
-    创建完整数据集并分割为训练集和测试集，返回对应的 DataLoader
+    创建完整数据集并分割为训练集、(验证集) 和测试集，返回对应的 DataLoader。
 
     Args:
         dataset_root (Path): 数据集根目录
         dataset_names (List[str]): 数据集根目录下的数据集名称
         batch_size (int): 批次大小
         transform (transforms.Compose): 图像变换方法
-        split (float, optional): 训练集占比. Defaults to 0.8.
+        split (float, optional): 训练集占总数据集的比例. Defaults to 0.8.
+        validation (bool, optional): 是否进行三方分割 (Train/Val/Test). Defaults to False.
+        val_ratio_of_remainder (float, optional): 如果 validation=True, 剩余部分中分给验证集的比例. Defaults to 0.5.
         random_seed (int, optional): 随机种子（保证分割可复现）. Defaults to 42.
         num_works (int, optional): 并行数量. Defaults to 4.
         labels_file_name (str, optional): 数据集目录下的标签文件名称. Defaults to 'labels.csv'.
 
     Returns:
-        Tuple[DataLoader, DataLoader]: 训练集DataLoader、测试集DataLoader
+        Tuple[DataLoader, ...]: 
+            如果 validation=False: (train_dataloader, test_dataloader)
+            如果 validation=True: (train_dataloader, val_dataloader, test_dataloader)
     """
     # 验证分割比例有效性
     if not (0 < split < 1):
         raise ValueError(f"split 必须在 (0, 1) 范围内，当前值: {split}")
+    if validation and not (0 < val_ratio_of_remainder < 1):
+        raise ValueError(f"val_ratio_of_remainder 必须在 (0, 1) 范围内，当前值: {val_ratio_of_remainder}")
     
     start_time = time.time()
     
@@ -165,60 +173,99 @@ def get_dataloader(
         labels_file_name=labels_file_name,
         transform=transform
     )
-    logger.info(f"完整数据集大小: {len(full_dataset)}")
-    
-    # 2. 数据集分割
     dataset_size = len(full_dataset)
-    train_size = int(dataset_size * split)
-    test_size = dataset_size - train_size
+    logger.info(f"完整数据集大小: {dataset_size}")
     
     # 设置随机种子保证可复现性
     random.seed(random_seed)
-    torch.manual_seed(random_seed)  # 如果使用GPU，还可以添加 torch.cuda.manual_seed_all(random_seed)
+    torch.manual_seed(random_seed) 
     
     indices = list(range(dataset_size))
     random.shuffle(indices)
     
-    train_indices = indices[:train_size]
-    test_indices = indices[train_size:]
+    # 2. 数据集分割
     
+    # A. 训练集大小
+    train_size = int(dataset_size * split)
+    train_indices = indices[:train_size]
+    
+    # B. 剩余部分
+    remainder_indices = indices[train_size:]
+    remainder_size = len(remainder_indices)
+    
+    val_dataset = None
+    val_dataloader = None
+    
+    if validation:
+        # 三方分割：Train / Val / Test
+        
+        # 剩余部分按 val_ratio_of_remainder 分割给 Val 和 Test
+        val_size = int(remainder_size * val_ratio_of_remainder)
+        
+        val_indices = remainder_indices[:val_size]
+        test_indices = remainder_indices[val_size:]
+        
+        # 创建验证集
+        val_dataset = Subset(full_dataset, val_indices)
+        logger.info(f"训练集大小: {len(train_indices)}, 验证集大小: {len(val_indices)}, 测试集大小: {len(test_indices)}")
+    else:
+        # 二方分割：Train / Test
+        test_indices = remainder_indices # 剩余部分全部作为测试集
+        logger.info(f"训练集大小: {len(train_indices)}, 测试集大小: {len(test_indices)}")
+
+    # 创建训练集和测试集
     train_dataset = Subset(full_dataset, train_indices)
     test_dataset = Subset(full_dataset, test_indices)
-    
-    logger.info(f"训练集大小: {len(train_dataset)}, 测试集大小: {len(test_dataset)}")
     
     # 3. 定义 collate_fn 处理损坏文件
     def collate_fn(batch):
         # 过滤掉 None/损坏的样本
         batch = list(filter(lambda x: x is not None, batch))
         if not batch:
-            return None, None
+            # 返回 None, None 让上层调用者可以跳过这个批次
+            return None, None 
         return default_collate(batch)
     
-    # 4. 构建训练集 DataLoader（打乱、使用collate_fn）
+    # 4. 构建 DataLoader
+    
+    # 训练集 DataLoader（打乱）
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,  # 训练集打乱
+        shuffle=True, 
         num_workers=num_works,
         collate_fn=collate_fn,
         pin_memory=True
     )
     
-    # 5. 构建测试集 DataLoader（不打乱、可选collate_fn）
+    # 验证集 DataLoader（不打乱）
+    if validation:
+        val_dataloader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False, 
+            num_workers=num_works,
+            collate_fn=collate_fn,
+            pin_memory=True
+        )
+    
+    # 测试集 DataLoader（不打乱）
     test_dataloader = DataLoader(
         test_dataset,
         batch_size=batch_size,
-        shuffle=False,  # 测试集不打乱
+        shuffle=False, 
         num_workers=num_works,
-        collate_fn=collate_fn,  # 测试集也可以保留collate_fn处理可能的损坏文件
+        collate_fn=collate_fn,
         pin_memory=True
     )
     
     end_time = time.time()
     logger.info(f"数据集加载与分割完成，总耗时: {end_time - start_time:.2f}s")
     
-    return train_dataloader, test_dataloader
+    if validation:
+        return (train_dataloader, val_dataloader, test_dataloader)
+    else:
+        return (train_dataloader, test_dataloader)
 
 @logger.catch()
 def get_validation_dataloader(

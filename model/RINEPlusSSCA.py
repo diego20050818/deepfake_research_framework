@@ -1,6 +1,3 @@
-# -----------------------------
-# Full Model
-# -----------------------------
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,14 +6,17 @@ from transformers import CLIPVisionModel
 # import os
 # import sys
 # sys.path.append(os.getcwd())
-from model.CrossAttention import CrossAttentionCombination
-from model.DCTConvBlock import DCTConvBlock
-from model.GateMLP import GatedMLP
-from model.SSCA import SSCA
+from module.CrossAttention import CrossAttentionCombination
+from module.DCTConvBlock import DCTConvBlock
+from module.GateMLP import GatedMLP
+from module.SSCA import SSCA
 import os
 # os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
 # os.environ['HF_ENDPOINT'] = 'https://mirrors.aliyun.com/hugging-face-models'
 
+"""
+改进的rins使用了双分支
+"""
 class RINEPlusSSCA(nn.Module):
     def __init__(self, clip_model_name='openai/clip-vit-large-patch14', proj_dim=1024, repr_dim=512, use_layers=None):
         """
@@ -116,7 +116,7 @@ class RINEPlusSSCA(nn.Module):
         x_stem = self.stem_conv(images)  # [B, 64, H/2, W/2]
         dct_feat = self.dct_block(x_stem)  # [B, 128, 1, 1]
         # optionally expand to spatial for SSCA: create a small feature map by tiling
-        small_map = dct_feat.expand(-1, -1, 14, 14)  # [B, 128, 14, 14] (prototype)
+        small_map = dct_feat.expand(-1, -1, 16, 16)  # [B, 128, 14, 14] (prototype)
         ssca_out = self.ssca(small_map)  # [B, 128, 14, 14]
         ssca_vec = self.ssca_pool(ssca_out).view(B, 128)  # [B, 128]
         z_dct = ssca_vec
@@ -129,5 +129,3 @@ class RINEPlusSSCA(nn.Module):
         rep_for_contrast = self.repr_out(z_repr)  # [B, repr_dim]
         # return logits, rep_for_contrast
         return logits
-    
-

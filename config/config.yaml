@@ -10,4 +10,5 @@ dataset_path:
 
 
 model_save_path: ./checkpoint
+validation: True  # 是否训练后验证
 

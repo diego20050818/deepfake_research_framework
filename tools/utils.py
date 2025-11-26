@@ -1,4 +1,5 @@
 from facenet_pytorch import MTCNN
+from loguru import logger
 import torch
 import torch.nn as nn
 import numpy as np
@@ -450,3 +451,16 @@ def print_model_summary(
     console.print(f"[bold]Trainable Ratio:[/bold] {trainable_params / total_params:.2%}" if total_params > 0 else "0.00%")
     # 修复：使用正确的标签闭合（同时移除多余的分隔符，保持简洁）
     console.print("\n")
+
+def check_data_distribution(loader, name="Data"):
+    """检查数据输入的统计分布，防止归一化不一致问题"""
+    try:
+        data, target = next(iter(loader))
+        logger.info(f"--- {name} Sanity Check ---")
+        logger.info(f"Input Shape: {data.shape}")
+        logger.info(f"Input Mean: {data.mean().item():.4f} | Std: {data.std().item():.4f}")
+        logger.info(f"Input Min: {data.min().item():.4f} | Max: {data.max().item():.4f}")
+        logger.info(f"Target Example: {target[:5].tolist()}")
+        logger.info("---------------------------")
+    except Exception as e:
+        logger.warning(f"无法检查数据分布: {e}")

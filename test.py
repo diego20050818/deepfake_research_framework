@@ -8,7 +8,7 @@ from datetime import datetime
 from tools.validation import ModelValidator
 from tools.dataset_loader import get_validation_dataloader,LimitedDataLoader
 from tools.image_preprocess import transforms_val
-from model.FullModel import RINEPlusSSCA
+from model import RINEPlusSSCA, FaceAntiSpoofingViT
 
 
 config_path = 'config/val_config.yaml'
@@ -36,6 +36,7 @@ limited_dataset = LimitedDataLoader(dataloader=val_dataset,max_batches=10)
 
 checkpoint_path = config.get('checkpoint_path')
 model = RINEPlusSSCA()
+# model = FaceAntiSpoofingViT()
 time_now = datetime.now().strftime("%Y年%m月%d日 > %H:%M")
 log_dir = f'./runs/validation > {time_now}'
 

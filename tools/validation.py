@@ -84,14 +84,8 @@ class ModelValidator:
                 if hasattr(self, 'model') and self.model is not None:
                     self.model.load_state_dict(state_dict)
                 else:
-                    # 如果没有模型实例，创建一个占位符模型
-                    self.model = torch.nn.Module()  # 这只是一个占位符
-                    try:
-                        self.model.load_state_dict(state_dict)
-                    except Exception as e:
-                        logger.warning(f"无法直接加载状态字典: {e}")
-                        # 在这种情况下，我们只能使用状态字典本身
-                        self.model = state_dict
+                    # 如果没有模型实例，直接使用状态字典初始化模型
+                    raise ValueError("未提供模型实例，请在初始化ModelValidator时提供model参数")
             else:
                 # 如果checkpoint中没有明显的状态字典，尝试直接使用模型
                 self.model = checkpoint.get('model', checkpoint)
@@ -108,65 +102,99 @@ class ModelValidator:
     def validate(self) -> Dict[str, float]:
         """
         执行模型验证并计算各项指标
-        
-        Returns:
-            包含各项指标的字典
+        修复了 batch 不整除导致的 numpy 报错，并增加了详细的概率对比日志
         """
-        all_preds = []
-        all_labels = []
-        all_probs = []
+        # 使用列表收集每个 batch 的结果，最后再拼接
+        # 避免直接 append 到一个大 list 然后转 numpy 导致的维度错误
+        batch_preds_list = []
+        batch_labels_list = []
+        batch_probs_list = []
         
         # 添加进度条
         progress_bar = tqdm(self.dataloader, desc="Validating", leave=False)
         
+        self.model.eval() # 确保是 eval 模式
         with torch.no_grad():
             for inputs, labels in progress_bar:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
                 
-                outputs = self.model(inputs)
-                outputs = outputs[0]
-                probs = torch.sigmoid(outputs)
-                preds = (probs > 0.5).float()  # 使用0.5作为阈值
-
-                all_preds.extend(preds.cpu().numpy())
-                all_labels.extend(labels.cpu().numpy())
-                all_probs.extend(probs.cpu().numpy())
+                # --- 1. 获取模型输出 ---
+                try:
+                    # 你的模型返回 (logits, repr)
+                    outputs_tuple = self.model(inputs)
+                    if isinstance(outputs_tuple, tuple):
+                        logits = outputs_tuple[0] # 取第一个元素：logits
+                    else:
+                        logits = outputs_tuple
+                except Exception as e:
+                    print(f"Model output error: {e}")
+                    raise e
                 
-                # 更新进度条描述，显示当前批次的一些信息（可选）
-                progress_bar.set_postfix({
-                    'Batch Size': inputs.size(0)
-                })
+                # --- 2. 转换为正样本概率 ---
+                # Logits -> Sigmoid -> Probability (0.0 ~ 1.0)
+              
+                probs = torch.sigmoid(logits) 
+                
+                # --- 3. 生成硬预测 (0 或 1) ---
+                preds = (probs > 0.5).float()
+
+                # --- 4. 收集数据 (保持在 CPU 上) ---
+                # 注意：这里直接存 numpy 数组，而不是 extend 列表
+                batch_probs_list.append(probs.cpu().numpy())
+                batch_labels_list.append(labels.cpu().numpy())
+                batch_preds_list.append(preds.cpu().numpy())
+                
+                # 更新进度条
+                progress_bar.set_postfix({'Batch': inputs.size(0)})
         
-        # 转换为numpy数组
-        all_preds = np.array(all_preds)
-        all_labels = np.array(all_labels)
-        all_probs = np.array(all_probs)
+        # --- 5. 安全拼接 (Fix: 解决 inhomogeneity 报错) ---
+        # 使用 concatenate 处理最后一个 batch 大小不一致的问题
+        all_probs = np.concatenate(batch_probs_list, axis=0)
+        all_labels = np.concatenate(batch_labels_list, axis=0)
+        all_preds = np.concatenate(batch_preds_list, axis=0)
+
+        # all_probs = all_preds.squeeze(1) 
         
-        # 计算各项指标
+        # --- 6. 打印直观对比 ---
+        print("\n" + "="*40)
+        print("🔍 Probability vs Label Check (Top 10 samples)")
+        print(f"{'Probability (Positive)':<25} | {'Label':<10} | {'Correct?'}")
+        print("-" * 50)
+        for i in range(min(10, len(all_labels))):
+            p = all_probs[i]
+            l = all_labels[i]
+            # 判断预测是否正确
+            is_correct = "✅" if (p > 0.5) == (l == 1) else "❌"
+            print(f"{p:.4f} ({(p*100):.1f}%) {'':<12} | {int(l):<10} | {is_correct}")
+        print("="*40 + "\n")
+
+        # --- 7. 计算指标 (保持原有逻辑) ---
         metrics = {}
         metrics['accuracy'] = accuracy_score(all_labels, all_preds)
-        metrics['precision'] = precision_score(all_labels, all_preds, average='weighted')
-        metrics['recall'] = recall_score(all_labels, all_preds, average='weighted')
-        metrics['f1_score'] = f1_score(all_labels, all_preds, average='weighted')
+        metrics['precision'] = precision_score(all_labels, all_preds, average='weighted', zero_division=0)
+        metrics['recall'] = recall_score(all_labels, all_preds, average='weighted', zero_division=0)
+        metrics['f1_score'] = f1_score(all_labels, all_preds, average='weighted', zero_division=0)
         
-        # 对于二分类任务计算AUC
+        # 二分类特有指标
         if len(self.class_names) == 2:
-            # 修复：对于二分类，如果只有一个概率值（正类概率），直接使用
-            if all_probs.ndim == 1:
-                metrics['auc'] = roc_auc_score(all_labels, all_probs)
-            else:
-                metrics['auc'] = roc_auc_score(all_labels, all_probs[:, 1])
-        else:
-            # 多分类AUC
             try:
-                metrics['auc'] = roc_auc_score(all_labels, all_probs, multi_class='ovr')
-            except:
+                metrics['auc'] = roc_auc_score(all_labels, all_probs)
+                
+                # 计算最佳阈值
+                fpr, tpr, thresholds = roc_curve(all_labels, all_probs)
+                optimal_idx = np.argmax(tpr - fpr)
+                optimal_threshold = thresholds[optimal_idx]
+                metrics['optimal_threshold'] = optimal_threshold
+                
+                optimal_preds = (all_probs >= optimal_threshold).astype(int)
+                metrics['optimal_accuracy'] = accuracy_score(all_labels, optimal_preds)
+            except Exception as e:
+                print(f"Warning: Could not calculate ROC/AUC: {e}")
                 metrics['auc'] = 0.0
         
-        # 计算错误率
         metrics['error_rate'] = 1 - metrics['accuracy']
         
-        return metrics, all_labels, all_preds, all_probs # type:ignore
+        return metrics, all_labels, all_preds, all_probs
     
     def plot_confusion_matrix(self, labels: np.ndarray, preds: np.ndarray) -> plt.Figure: # type:ignore
         """绘制混淆矩阵"""
@@ -179,7 +207,7 @@ class ModelValidator:
         ax.set_xlabel('Predicted Labels')
         ax.set_ylabel('True Labels')
         ax.set_title(f'Confusion Matrix \nmodel:{self.name}\ndataset:{self.data_name}',
-                     pad=15)    # BUG 可能出现title显示不正常
+                     pad=15)   
         plt.tight_layout()
         return fig
     
@@ -187,62 +215,30 @@ class ModelValidator:
         """绘制ROC曲线"""
         fig, ax = plt.subplots(figsize=(8, 6))
         
-        # 处理二分类情况
-        if len(self.class_names) == 2:
-            if probs.ndim == 1:
-                # 如果probs是一维的，直接使用
-                fpr, tpr, _ = roc_curve(labels, probs)
-                auc_score = roc_auc_score(labels, probs)
-            else:
-                # 如果probs是二维的，使用第二列（正类）
-                fpr, tpr, _ = roc_curve(labels, probs[:, 1])
-                auc_score = roc_auc_score(labels, probs[:, 1])
-            
-            ax.plot(fpr, tpr, color='darkorange', lw=2, 
-                   label=f'ROC curve (AUC = {auc_score:.2f})')
-            ax.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', 
-                   label='Random classifier')
-            ax.set_xlim([0.0, 1.0])
-            ax.set_ylim([0.0, 1.05])
-            ax.set_xlabel('False Positive Rate')
-            ax.set_ylabel('True Positive Rate')
-            ax.set_title(f'Receiver Operating Characteristic (ROC) Curve\nmodel:{self.name}\ndataset:{self.data_name}',
-                         pad=15,
-                         )  # TODO  这个也添加元信息
-            ax.legend(loc="lower right")
-            ax.grid(True)
+
+        if probs.ndim == 1:
+            # 如果probs是一维的，直接使用
+            fpr, tpr, _ = roc_curve(labels, probs)
+            auc_score = roc_auc_score(labels, probs)
         else:
-            # 多分类ROC曲线
-            from sklearn.preprocessing import label_binarize
-            from sklearn.multiclass import OneVsRestClassifier
-            from itertools import cycle
-            
-            # Binarize the output
-            y_bin = label_binarize(labels, classes=range(len(self.class_names)))
-            n_classes = y_bin.shape[1]
-            
-            # Compute ROC curve and ROC area for each class
-            fpr = dict()
-            tpr = dict()
-            roc_auc = dict()
-            for i in range(n_classes):
-                fpr[i], tpr[i], _ = roc_curve(y_bin[:, i], probs[:, i])
-                roc_auc[i] = auc(fpr[i], tpr[i])
-            
-            # Plot ROC curves
-            colors = cycle(['aqua', 'darkorange', 'cornflowerblue'])
-            for i, color in zip(range(n_classes), colors):
-                ax.plot(fpr[i], tpr[i], color=color, lw=2,
-                       label=f'ROC curve of class {self.class_names[i]} (AUC = {roc_auc[i]:.2f})')
-            
-            ax.plot([0, 1], [0, 1], 'k--', lw=2)
-            ax.set_xlim([0.0, 1.0])
-            ax.set_ylim([0.0, 1.05])
-            ax.set_xlabel('False Positive Rate')
-            ax.set_ylabel('True Positive Rate')
-            ax.set_title('Multi-class ROC Curves')
-            ax.legend(loc="lower right")
-            ax.grid(True)
+            # 如果probs是二维的，使用第二列（正类）
+            fpr, tpr, _ = roc_curve(labels, probs[:, 1])# BUG
+            auc_score = roc_auc_score(labels, probs[:, 1])
+        
+        ax.plot(fpr, tpr, color='darkorange', lw=2, 
+                label=f'ROC curve (AUC = {auc_score:.2f})')
+        ax.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', 
+                label='Random classifier')
+        ax.set_xlim([0.0, 1.0])
+        ax.set_ylim([0.0, 1.05])
+        ax.set_xlabel('False Positive Rate')
+        ax.set_ylabel('True Positive Rate')
+        ax.set_title(f'Receiver Operating Characteristic (ROC) Curve\nmodel:{self.name}\ndataset:{self.data_name}',
+                        pad=15,
+                        )  
+        ax.legend(loc="lower right")
+        ax.grid(True)
+
         
         plt.tight_layout()
         return fig
@@ -269,7 +265,8 @@ class ModelValidator:
             axes[i].axis('off')
             
         plt.tight_layout()
-        plt.title(f"sample images\n{self.name}\n{self.data_name}")
+        fig.suptitle(f"Sample images\n{self.name}\n{self.data_name}", fontsize=16, y=0.98)
+        plt.subplots_adjust(top=0.85)
         return fig
     
     def log_to_tensorboard(self, metrics: Dict[str, float], 
@@ -294,7 +291,7 @@ class ModelValidator:
         
         # 创建指标表格
         metric_table = f"#### model:{self.name}\n#### dataset:{self.data_name}\n"
-        metric_table += "| Metric | Value |\n|--------|-------|\n"       # TODO 添加模型名称
+        metric_table += "| Metric | Value |\n|--------|-------|\n"       
         for name, value in metrics.items():
             metric_table += f"| {name} | {value:.4f} |\n"
         
@@ -307,6 +304,7 @@ class ModelValidator:
         self.writer.add_text('Validation/Metrics_Table', metric_table, 0)
         self.writer.add_text('Validation/Metrics_Text', metric_text, 0)
     
+    # @logger.catch()
     def run_validation(self):
         """运行完整的验证流程"""
         logger.info("Running validation...")

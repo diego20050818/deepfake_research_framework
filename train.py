@@ -10,11 +10,12 @@ from pathlib import Path
 from datetime import datetime
 
 from tools.utils import print_config,print_model_summary,yaml_to_string
-from tools.dataset_loader import get_dataloader
+from tools.dataset_loader import get_dataloader,LimitedDataLoader
 from tools.image_preprocess import transforms_train
 from tools.trainer import train_model
+from tools.validation import ModelValidator
 
-from model import RINEPlusSSCA
+from model import RINEPlusSSCA,FaceAntiSpoofingViT,MultiScaleHierarchicalTransformer
 
 base_config_path = 'config/config.yaml'
 train_config_path = 'config/train_config.yaml'
@@ -40,22 +41,40 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # -----------------
 dataset_root = Path(base_config.get('dataset_root','./dataset'))
 
-train_dataset, test_dataset = get_dataloader(
-    dataset_root=dataset_root,
-    dataset_names=base_config.get('dataset_path',['Celeb-DF']),
-    batch_size=train_config.get('batch_size',16),
-    transform=transforms_train,
-    split=train_config.get('dataset_split',0.8)
-)
+if base_config['validation']:
+    train_dataset, test_dataset,val_dataset = get_dataloader(
+        validation=True,
+        dataset_root=dataset_root,
+        dataset_names=base_config.get('dataset_path',['Celeb-DF']),
+        batch_size=train_config.get('batch_size',16),
+        transform=transforms_train,
+        split=train_config.get('dataset_split',0.8)
+    )
+    # val_dataset = LimitedDataLoader(val_dataset,10)
+else:
+        train_dataset, test_dataset = get_dataloader(
+        dataset_root=dataset_root,
+        dataset_names=base_config.get('dataset_path',['Celeb-DF']),
+        batch_size=train_config.get('batch_size',16),
+        transform=transforms_train,
+        split=train_config.get('dataset_split',0.8)
+        )
+
+
+# train_dataset = LimitedDataLoader(train_dataset,50)
+# test_dataset  = LimitedDataLoader(test_dataset,10)
+
 
 # -----------------
 # 模型定义
 # -----------------
-model = RINEPlusSSCA().to(device)
+# model = RINEPlusSSCA().to(device)
+# model = FaceAntiSpoofingViT().to(device)
+model = MultiScaleHierarchicalTransformer().to(device)
 
 
 logger.info("load model successfully")
-pprint(model)
+# pprint(model)
 
 time_now = datetime.now().strftime("%Y年%m月%d日 > %H:%M")
 log_dir = f'./runs/experiment > {time_now}'
@@ -80,7 +99,7 @@ logger.info("begin training")
 # -----------------
 # 开始训练
 # -----------------
-train_model(
+result = train_model(
     model=model,
     train_dataset=train_dataset,
     test_dataset=test_dataset,
@@ -90,6 +109,26 @@ train_model(
     checkpoint_path=chechpoint_path
 )
 
+if base_config['validation']:
+    time_now = datetime.now().strftime("%Y年%m月%d日 > %H:%M")
+    log_dir = f'./runs/validation > {time_now}'
+    checkpoint_path = result.get('best_checkpoint')
+
+    checkpoint_info = {
+        'name': checkpoint_path,
+        'dataset':base_config.get('dataset_path')
+    }
+
+    validator = ModelValidator(
+        model_path=checkpoint_path,
+        model=model,
+        chechpoint_info=checkpoint_info,
+        dataloader=val_dataset, # type:ignore
+        class_names=['fake', 'real'],  
+        log_dir=log_dir
+    )
+    # 运行验证
+    validator.run_validation()
 
 
 

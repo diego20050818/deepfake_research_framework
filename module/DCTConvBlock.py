@@ -5,7 +5,66 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional
+import numpy as np
+from scipy.fft import dctn, idctn
+from scipy.fftpack import dct, idct
 
+
+
+class SimpleDCTLayer(nn.Module):
+    """
+    简化的频域变换层 - 使用快速傅里叶变换(FFT)将图像转换到频域
+    用于提取频域特征，检测篡改痕迹
+    """
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        """
+        前向传播
+        Args:
+            x: 输入特征图，形状为 [B, C, H, W]
+        Returns:
+            频域幅度谱，形状与 torch.fft.rfft2 输出对应（通常 [B, C, H, W//2+1]）
+        说明：
+            在 GPU 半精度（float16）下，cuFFT 对非 2 的幂尺寸存在限制。
+            因此在输入为 float16 时先转换为 float32 进行 FFT，再转换回原始精度。
+        """
+        orig_dtype = x.dtype
+        # 对 float16（半精度）输入先转为 float32 避免 cuFFT 限制
+        if orig_dtype == torch.float16:
+            x_proc = x.float()
+        else:
+            x_proc = x
+
+        # 计算 rfft2 并取幅值 
+        X = torch.fft.rfft2(x_proc, norm="ortho")
+        mag = X.abs()
+
+        # 恢复为原始精度（若原来是 float16）
+        if orig_dtype == torch.float16:
+            mag = mag.half()
+        return mag
+
+    
+class DCTModule(nn.Module):
+    """使用scipy实现的DCT模块"""
+    def __init__(self, norm='ortho'):
+        super().__init__()
+        self.norm = norm
+
+    def forward(self, x):
+        # x: [B, C, H, W]
+        # 对每个批次和通道分别进行2D DCT变换
+        B, C, H, W = x.shape
+        x_np = x.detach().cpu().numpy()
+        dct_result = np.zeros_like(x_np)
+        
+        for b in range(B):
+            for c in range(C):
+                dct_result[b, c, :, :] = dctn(x_np[b, c, :, :], norm=self.norm)
+        
+        return torch.from_numpy(dct_result).to(x.device)
 
 class DCTConvBlock(nn.Module):
     """DCT 卷积块（DCTConvBlock）

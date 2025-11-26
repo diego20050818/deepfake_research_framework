@@ -1,7 +1,7 @@
 # 基础训练配置
 epochs: 2
 learning_rate: 1e-4
-batch_size: 32
+batch_size: 8
 dataset_split: 0.8
 
 # 优化器相关配置
@@ -26,3 +26,9 @@ log_dir: "./runs"
 
 # 随机种子（可选）
 seed: 42
+
+# 梯度累积步数（默认为1，即不使用梯度累积）
+gradient_accumulation_steps: 4
+
+# 混合精度训练（默认为False，即不使用混合精度）
+use_mixed_precision: True
